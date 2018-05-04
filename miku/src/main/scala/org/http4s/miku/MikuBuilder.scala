@@ -309,7 +309,9 @@ class MikuBuilder[F[_]](
       (channel, channelPublisher.toStream[F]())
     }
 
-    val (serverChannel, channelSource) = bind(socketAddress)
+    //Resolve address
+    val resolvedAddress = new InetSocketAddress(socketAddress.getHostName, socketAddress.getPort)
+    val (serverChannel, channelSource) = bind(resolvedAddress)
     F.runAsync(
         channelSource
           .through(channelPipe)
@@ -343,6 +345,7 @@ object MikuBuilder {
       ec = ExecutionContext.global,
       banner = MikuBanner
     )
+  ServerBuilder.DefaultSocketAddress.isUnresolved
 
   val MikuBanner =
     """　　　　　　　 ┌--,--‐'￣￣￣ー―-､／＼
