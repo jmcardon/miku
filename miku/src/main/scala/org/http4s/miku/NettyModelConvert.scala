@@ -230,7 +230,7 @@ object NettyModelConversion {
         dateHeaderString
       case _ =>
         val dateHeaderString =
-          HttpDate.unsafeFromEpochSecond(currentTimeMillis).toString()
+          HttpDate.unsafeFromEpochSecond(currentTimeSeconds).toString()
         cachedDateHeader = currentTimeSeconds -> dateHeaderString
         dateHeaderString
     }

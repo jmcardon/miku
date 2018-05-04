@@ -113,6 +113,8 @@ class MikuBuilder[F[_]](
         allChannels.close().awaitUninterruptibly()
         // Now shutdown the event loop
         eventLoop.shutdownGracefully()
+
+        logger.info("Shut down gracefully :)")
       }
 
       def onShutdown(f: => Unit): this.type = {
@@ -125,7 +127,7 @@ class MikuBuilder[F[_]](
       def isSecure: Boolean = sslBits.isDefined
     }
     banner.foreach(logger.info(_))
-    logger.info(s"༼ つ ◕_◕ ༽つ Started Miku Server at ${server.baseUri} ༼ つ ◕_◕ ༽つ")
+    logger.info(s"༼ つ ◕_◕ ༽つ Started Miku(Netty) Server at ${server.baseUri} ༼ つ ◕_◕ ༽つ")
     server
   }
 
