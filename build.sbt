@@ -9,6 +9,7 @@ val nettyVersion = "4.1.24.Final"
 lazy val commonSettings = Seq(
   libraryDependencies ++= Seq(
     "org.http4s"            %% "http4s-server"               % Http4sVersion,
+    "org.http4s"            %% "http4s-testing"               % Http4sVersion % "test",
     "org.http4s"            %% "http4s-dsl"                  % Http4sVersion,
     "org.specs2"            %% "specs2-core"                 % Specs2Version % "test",
     "ch.qos.logback"        % "logback-classic"              % LogbackVersion,

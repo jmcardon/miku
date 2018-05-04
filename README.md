@@ -17,6 +17,7 @@ Credits to them for a lot of the gluework for netty.
 - [ ] Tests
 - [ ] More tests
 - [ ] Profilin'
+- [ ] Websocket support
 
 ## Try it!
 
