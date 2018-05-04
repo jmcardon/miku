@@ -17,3 +17,8 @@ Credits to them for a lot of the gluework for netty.
 - [ ] Tests
 - [ ] More tests
 - [ ] Profilin'
+
+## Try it!
+
+Fork the repo, move to the examples project and play with the `ServerBuilder` there.
+
