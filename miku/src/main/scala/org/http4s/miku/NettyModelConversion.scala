@@ -30,8 +30,6 @@ import scala.concurrent.ExecutionContext
   */
 object NettyModelConversion {
 
-  private val logger = getLogger
-
   /** Turn a netty http request into an http4s request
     *
     * @param channel the netty channel

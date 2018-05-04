@@ -79,8 +79,11 @@ abstract class Http4sNettyHandler[F[_]](service: HttpService[F], serviceErrorHan
 
           }
           .unsafeRunSync()
-        val futureResponse = p.future
+        val futureResponse: Future[HttpResponse] = p.future
 
+        //This attaches all writes sequentially using
+        //LastResponseSent as a queue. `trampoline` ensures we do not
+        //CTX switch the writes.
         lastResponseSent = lastResponseSent.flatMap[Unit] { _ =>
           futureResponse
             .map[Unit] { response =>
