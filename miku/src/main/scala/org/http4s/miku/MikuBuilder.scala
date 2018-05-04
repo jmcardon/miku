@@ -1,7 +1,7 @@
 package org.http4s.miku
 
 import java.io.FileInputStream
-import java.net.{InetSocketAddress, SocketAddress}
+import java.net.InetSocketAddress
 import java.security.{KeyStore, Security}
 import javax.net.ssl.{KeyManagerFactory, SSLContext, TrustManagerFactory}
 
@@ -33,6 +33,31 @@ sealed trait NettyTransport
 case object Jdk    extends NettyTransport
 case object Native extends NettyTransport
 
+/** Netty server builder.
+  *
+  *
+  * @param httpService
+  * @param socketAddress
+  * @param idleTimeout
+  * @param maxInitialLineLength The maximum length of the initial line. This effectively restricts the maximum length of a URL that the server will
+  *                             accept, the initial line consists of the method (3-7 characters), the URL, and the HTTP version (8 characters),
+  *                             including typical whitespace, the maximum URL length will be this number - 18.
+  * @param maxHeaderSize The maximum length of the HTTP headers. The most common effect of this is a restriction in cookie length, including
+  *                      number of cookies and size of cookie values.
+  * @param maxChunkSize The maximum length of body bytes that Netty will read into memory at a time.
+  *                     This is used in many ways.  Note that this setting has no relation to HTTP chunked transfer encoding - Netty will
+  *                     read "chunks", that is, byte buffers worth of content at a time and pass it to Play, regardless of whether the body
+  *                     is using HTTP chunked transfer encoding.  A single HTTP chunk could span multiple Netty chunks if it exceeds this.
+                        A body that is not HTTP chunked will span multiple Netty chunks if it exceeds this or if no content length is
+                        specified. This only controls the maximum length of the Netty chunk byte buffers.
+  * @param sslBits The SSL information.
+  * @param serviceErrorHandler
+  * @param transport
+  * @param ec
+  * @param banner
+  * @param F
+  * @tparam F
+  */
 class MikuBuilder[F[_]](
     httpService: HttpService[F],
     socketAddress: InetSocketAddress,
@@ -54,7 +79,7 @@ class MikuBuilder[F[_]](
   private val logger = getLogger
 
   protected[this] def newRequestHandler(): ChannelInboundHandler =
-    new Http4sNettyHandler[F](httpService) {}
+    new Http4sNettyHandler[F](httpService, serviceErrorHandler) {}
 
   type Self = MikuBuilder[F]
 
@@ -260,7 +285,6 @@ class MikuBuilder[F[_]](
       // Watches for channel events, and pushes them through a reactive streams publisher.
       val channelPublisher =
         new HandlerPublisher(serverChannelEventLoop, classOf[Channel])
-      val addresss = new InetSocketAddress("127.0.0.1", 8080)
 
       val bootstrap = transport match {
         case Jdk =>
@@ -269,14 +293,14 @@ class MikuBuilder[F[_]](
             .group(serverChannelEventLoop)
             .option(ChannelOption.AUTO_READ, java.lang.Boolean.FALSE) // publisher does ctx.read()
             .handler(channelPublisher)
-            .localAddress(addresss)
+            .localAddress(address)
         case Native =>
           new Bootstrap()
             .channel(classOf[EpollServerSocketChannel])
             .group(serverChannelEventLoop)
             .option(ChannelOption.AUTO_READ, java.lang.Boolean.FALSE) // publisher does ctx.read()
             .handler(channelPublisher)
-            .localAddress(addresss)
+            .localAddress(address)
       }
 
       val channel = bootstrap.bind.await().channel()

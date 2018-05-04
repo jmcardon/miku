@@ -1,98 +1,81 @@
 package org.http4s.miku
 
-import java.net.{InetAddress, InetSocketAddress, URI}
-import java.security.cert.X509Certificate
-import java.time.Instant
-import javax.net.ssl.SSLPeerUnverifiedException
+import java.net.InetSocketAddress
 
-import cats.effect.{Effect, Sync}
+import cats.effect.Effect
 import cats.syntax.all._
-import org.http4s.{
-  AttributeEntry,
-  AttributeMap,
-  Header,
-  Headers,
-  HttpDate,
-  Method,
-  ParseFailure,
-  ParseResult,
-  Request,
-  Response,
-  Status,
-  Uri,
-  HttpVersion => HV
-}
-import org.http4s.headers.{Date, Server, `Content-Length`, `Content-Type`, Connection => HConnection}
-
-import scala.collection.mutable.ListBuffer
 import com.typesafe.netty.http.{DefaultStreamedHttpResponse, StreamedHttpRequest}
-import io.netty.buffer.{ByteBuf, Unpooled}
+import io.netty.buffer.Unpooled
 import io.netty.channel.Channel
 import io.netty.handler.codec.http._
 import io.netty.handler.ssl.SslHandler
-import io.netty.util.ReferenceCountUtil
 import fs2._
 import fs2.interop.reactivestreams._
 import org.http4s.Request.Connection
-
-import scala.collection.JavaConverters._
-import scala.concurrent.{ExecutionContext, Future}
-import org.log4s.getLogger
+import org.http4s.headers.{Date, `Content-Length`, Connection => HConnection}
 import org.http4s.util.execution.trampoline
+import org.http4s.{HttpVersion => HV, _}
+import org.log4s.getLogger
 
+import scala.collection.mutable.ListBuffer
+import scala.concurrent.ExecutionContext
+
+/** Helpers for converting http4s request/response
+  * objects to and from the netty model
+  *
+  * Adapted from NettyModelConversion.scala
+  * in
+  * https://github.com/playframework/playframework/blob/master/framework/src/play-netty-server
+  *
+  */
 object NettyModelConversion {
 
   private val logger = getLogger
 
-  def fromNettyRequest[F[_]](channel: Channel, httpRequest: HttpRequest)(
+  /** Turn a netty http request into an http4s request
+    *
+    * @param channel the netty channel
+    * @param request the netty http request impl
+    * @return Http4s request
+    */
+  def fromNettyRequest[F[_]](channel: Channel, request: HttpRequest)(
       implicit F: Effect[F]
   ): F[Request[F]] = {
-    val connection  = createRemoteConnection(channel)
-    val requestBody = convertRequestBody(httpRequest)
-    F.fromEither(parseFields(httpRequest).map {
-      case (uri, hv, method, headers) =>
-        Request[F](
-          method,
-          uri,
-          hv,
-          Headers(headers),
-          requestBody,
-          AttributeMap(AttributeEntry(Request.Keys.ConnectionInfo, connection))
-        )
-    })
-  }
-
-  /**
-    * Convert a Netty request to a Play RequestHeader.
-    *
-    * Will return a failure if there's a protocol error or some other error in the header.
-    */
-  private def parseFields(request: HttpRequest): Either[ParseFailure, (Uri, HV, Method, List[Header])] =
+    val connection = createRemoteConnection(channel)
     if (request.decoderResult().isFailure)
-      ParseResult.fail("Malformed request", "Netty codec parsing unsuccessful")
+      F.raiseError(ParseFailure("Malformed request", "Netty codec parsing unsuccessful"))
     else {
+      val requestBody           = convertRequestBody(request)
       val uri: ParseResult[Uri] = Uri.fromString(request.uri())
-      val headers               = request.headers()
       val headerBuf             = new ListBuffer[Header]
-      headers.entries().forEach { entry =>
+      request.headers().entries().forEach { entry =>
         headerBuf += Header(entry.getKey, entry.getValue)
       }
       val method: ParseResult[Method] =
         Method.fromString(request.method().name())
-      val version: ParseResult[HV] = {
+      val version: HV = {
         if (request.protocolVersion() == HttpVersion.HTTP_1_1)
-          ParseResult.success(HV.`HTTP/1.1`)
-        else if (request.protocolVersion() == HttpVersion.HTTP_1_0)
-          ParseResult.success(HV.`HTTP/1.0`)
+          HV.`HTTP/1.1`
         else
-          ParseResult.fail("Invalid Http Version", "Incorrect http header matching")
+          HV.`HTTP/1.0`
       }
-      for {
-        u <- uri
-        v <- version
-        m <- method
-      } yield (u, v, m, headerBuf.toList)
+      uri.flatMap { u =>
+        method.map { m =>
+          Request[F](
+            m,
+            u,
+            version,
+            Headers(headerBuf.toList),
+            requestBody,
+            AttributeMap(AttributeEntry(Request.Keys.ConnectionInfo, connection))
+          )
+        }
+      } match { //Micro-optimization: No fold call
+        case Right(http4sRequest) => F.pure(http4sRequest)
+        case Left(err)            => F.raiseError(err)
+      }
     }
+  }
 
   /** Capture a request's connection info from its channel and headers. */
   private def createRemoteConnection(channel: Channel): Connection =
@@ -102,7 +85,9 @@ object NettyModelConversion {
       channel.pipeline().get(classOf[SslHandler]) != null
     )
 
-  /** Create the source for the request body */
+  /** Create the source for the request body
+    * Todo: Turn off scalastyle due to non-exhaustive match
+    */
   private def convertRequestBody[F[_]](request: HttpRequest)(
       implicit F: Effect[F]
   ): Stream[F, Byte] =
@@ -130,22 +115,6 @@ object NettyModelConversion {
         })
     }
 
-  /** Create a Netty response from the result */
-  def toNettyResponse[F[_]](result: Response[F])(implicit F: Effect[F], ec: ExecutionContext): F[HttpResponse] =
-    toNettyResponse_[F](result)
-      .handleError { e =>
-        logger.error(e)("unhandled error")
-        val response =
-          new DefaultFullHttpResponse(
-            HttpVersion.HTTP_1_1,
-            HttpResponseStatus.INTERNAL_SERVER_ERROR,
-            Unpooled.EMPTY_BUFFER
-          )
-        HttpUtil.setContentLength(response, 0)
-        response.headers().add(HConnection.name, "close")
-        response
-      }
-
   /** Create a Netty streamed response. */
   private def responseToPublisher[F[_]](
       response: Response[F]
@@ -168,38 +137,37 @@ object NettyModelConversion {
     go(response.body).stream.toUnicastPublisher()
   }
 
-  /** Create a Netty chunked response. */
-  private def toNettyResponse_[F[_]](
+  /** Create a Netty response from the result */
+  def toNettyResponse[F[_]](
       http4sResponse: Response[F]
-  )(implicit F: Effect[F], ec: ExecutionContext): F[HttpResponse] =
+  )(implicit F: Effect[F], ec: ExecutionContext): HttpResponse = {
+    val httpVersion: HttpVersion =
+      if (http4sResponse.httpVersion == HV.`HTTP/1.1`)
+        HttpVersion.HTTP_1_1
+      else
+        HttpVersion.HTTP_1_0
+
     if (http4sResponse.status.isEntityAllowed) {
       val publisher = responseToPublisher[F](http4sResponse)
       val response =
         new DefaultStreamedHttpResponse(
-          HttpVersion.HTTP_1_1,
+          httpVersion,
           HttpResponseStatus.valueOf(http4sResponse.status.code),
           publisher
         )
       http4sResponse.headers.foreach(h => response.headers().add(h.name.value, h.value))
-      //Todo: LOL Mutability. Do I want this?
-      if (!response.headers().contains(Date.name))
-        response.headers().add(Date.name, dateHeader)
-      F.pure(response)
+      response
     } else {
       val response = new DefaultFullHttpResponse(
-        HttpVersion.HTTP_1_1,
+        httpVersion,
         HttpResponseStatus.valueOf(http4sResponse.status.code)
       )
       http4sResponse.headers.foreach(h => response.headers().add(h.name.value, h.value))
-      http4sResponse.trailerHeaders.flatMap { trailers =>
-        F.delay {
-          trailers.foreach(h => response.trailingHeaders().add(h.name.value, h.value))
-          if (HttpUtil.isContentLengthSet(response))
-            response.headers().remove(`Content-Length`.name.toString())
-          response
-        }
-      }
+      if (HttpUtil.isContentLengthSet(response))
+        response.headers().remove(`Content-Length`.name.toString())
+      response
     }
+  }
 
   /** Convert a Chunk to a Netty ByteBuf. */
   private def chunkToNetty(bytes: Chunk[Byte]): HttpContent =
@@ -217,23 +185,5 @@ object NettyModelConversion {
 
   private val CachedEmpty: DefaultHttpContent =
     new DefaultHttpContent(Unpooled.EMPTY_BUFFER)
-
-  // todo: Play hack. Do I need it?
-  // cache the date header of the last response so we only need to compute it every second
-  private var cachedDateHeader: (Long, String) = (Long.MinValue, null)
-
-  private def dateHeader: String = {
-    val currentTimeMillis  = System.currentTimeMillis()
-    val currentTimeSeconds = currentTimeMillis / 1000
-    cachedDateHeader match {
-      case (cachedSeconds, dateHeaderString) if cachedSeconds == currentTimeSeconds =>
-        dateHeaderString
-      case _ =>
-        val dateHeaderString =
-          HttpDate.unsafeFromEpochSecond(currentTimeSeconds).toString()
-        cachedDateHeader = currentTimeSeconds -> dateHeaderString
-        dateHeaderString
-    }
-  }
 
 }
