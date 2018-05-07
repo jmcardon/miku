@@ -31,7 +31,7 @@ import scala.util.{Failure, Success}
   * @param ec
   * @tparam F
   */
-abstract class Http4sNettyHandler[F[_]](service: HttpService[F], serviceErrorHandler: ServiceErrorHandler[F])(
+sealed abstract class MikuHandler[F[_]](service: HttpService[F], serviceErrorHandler: ServiceErrorHandler[F])(
     implicit F: Effect[F],
     ec: ExecutionContext
 ) extends ChannelInboundHandlerAdapter {
@@ -52,17 +52,7 @@ abstract class Http4sNettyHandler[F[_]](service: HttpService[F], serviceErrorHan
   /**
     * Handle the given request.
     */
-  def handle(channel: Channel, request: HttpRequest): F[DefaultHttpResponse] = {
-    logger.trace("Http request received by netty: " + request)
-    NettyModelConversion
-      .fromNettyRequest[F](channel, request)
-      .flatMap { request =>
-        Async.shift(ec) >> F
-          .suspend(unwrapped(request))
-          .recoverWith(serviceErrorHandler(request))
-          .flatMap(NettyModelConversion.toNettyResponse[F](request, _))
-      }
-  }
+  def handle(channel: Channel, request: HttpRequest): F[DefaultHttpResponse]
 
   override def channelRead(ctx: ChannelHandlerContext, msg: Object): Unit = {
     logger.trace(s"channelRead: ctx = $ctx, msg = $msg")
@@ -171,4 +161,50 @@ abstract class Http4sNettyHandler[F[_]](service: HttpService[F], serviceErrorHan
     f.addListener(ChannelFutureListener.CLOSE)
     f
   }
+}
+
+object MikuHandler {
+  private class DefaultHandler[F[_]](service: HttpService[F], serviceErrorHandler: ServiceErrorHandler[F])(
+      implicit F: Effect[F],
+      ec: ExecutionContext
+  ) extends MikuHandler[F](service, serviceErrorHandler) {
+    override def handle(channel: Channel, request: HttpRequest): F[DefaultHttpResponse] = {
+      logger.trace("Http request received by netty: " + request)
+      NettyModelConversion
+        .fromNettyRequest[F](channel, request)
+        .flatMap { request =>
+          Async.shift(ec) >> F
+            .suspend(unwrapped(request))
+            .recoverWith(serviceErrorHandler(request))
+        }
+        .map(NettyModelConversion.toNettyResponse[F])
+    }
+  }
+
+  private class WebsocketHandler[F[_]](service: HttpService[F], serviceErrorHandler: ServiceErrorHandler[F])(
+      implicit F: Effect[F],
+      ec: ExecutionContext
+  ) extends MikuHandler[F](service, serviceErrorHandler) {
+    override def handle(channel: Channel, request: HttpRequest): F[DefaultHttpResponse] = {
+      logger.trace("Http request received by netty: " + request)
+      NettyModelConversion
+        .fromNettyRequest[F](channel, request)
+        .flatMap { request =>
+          Async.shift(ec) >> F
+            .suspend(unwrapped(request))
+            .recoverWith(serviceErrorHandler(request))
+            .flatMap(NettyModelConversion.toNettyResponseWithWebsocket[F](request, _))
+        }
+    }
+  }
+
+  def default[F[_]](service: HttpService[F], serviceErrorHandler: ServiceErrorHandler[F])(
+      implicit F: Effect[F],
+      ec: ExecutionContext
+  ): MikuHandler[F] = new DefaultHandler[F](service, serviceErrorHandler)
+
+  def websocket[F[_]](service: HttpService[F], serviceErrorHandler: ServiceErrorHandler[F])(
+      implicit F: Effect[F],
+      ec: ExecutionContext
+  ): MikuHandler[F] = new WebsocketHandler[F](service, serviceErrorHandler)
 }

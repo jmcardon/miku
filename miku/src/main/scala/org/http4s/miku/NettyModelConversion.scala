@@ -137,6 +137,19 @@ object NettyModelConversion {
 
   /** Create a Netty response from the result */
   def toNettyResponse[F[_]](
+      http4sResponse: Response[F]
+  )(implicit F: Effect[F], ec: ExecutionContext): DefaultHttpResponse = {
+    val httpVersion: HttpVersion =
+      if (http4sResponse.httpVersion == HV.`HTTP/1.1`)
+        HttpVersion.HTTP_1_1
+      else
+        HttpVersion.HTTP_1_0
+
+    toNonWSResponse[F](http4sResponse, httpVersion)
+  }
+
+  /** Create a Netty response from the result */
+  def toNettyResponseWithWebsocket[F[_]](
       httpRequest: Request[F],
       httpResponse: Response[F]
   )(implicit F: Effect[F], ec: ExecutionContext): F[DefaultHttpResponse] = {
