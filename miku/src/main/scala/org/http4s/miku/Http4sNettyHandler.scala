@@ -52,12 +52,16 @@ abstract class Http4sNettyHandler[F[_]](service: HttpService[F], serviceErrorHan
   /**
     * Handle the given request.
     */
-  def handle(channel: Channel, request: HttpRequest): F[HttpResponse] = {
+  def handle(channel: Channel, request: HttpRequest): F[DefaultHttpResponse] = {
     logger.trace("Http request received by netty: " + request)
     NettyModelConversion
       .fromNettyRequest[F](channel, request)
-      .flatMap(r => Async.shift(ec) >> F.suspend(unwrapped(r)).recoverWith(serviceErrorHandler(r)))
-      .map(NettyModelConversion.toNettyResponse[F])
+      .flatMap { request =>
+        Async.shift(ec) >> F
+          .suspend(unwrapped(request))
+          .recoverWith(serviceErrorHandler(request))
+          .flatMap(NettyModelConversion.toNettyResponse[F](request, _))
+      }
   }
 
   override def channelRead(ctx: ChannelHandlerContext, msg: Object): Unit = {
