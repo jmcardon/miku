@@ -1,17 +1,18 @@
 val Http4sVersion             = "0.18.8"
-val Specs2Version             = "4.0.3"
+val Specs2Version             = "4.1.0"
 val LogbackVersion            = "1.2.3"
 val fs2ReactiveStreamsVersion = "0.5.1"
 val typesafeNettyVersion      = "2.0.0"
-
-val nettyVersion = "4.1.24.Final"
+val nettyVersion              = "4.1.24.Final"
 
 lazy val commonSettings = Seq(
   libraryDependencies ++= Seq(
     "org.http4s"            %% "http4s-server"               % Http4sVersion,
-    "org.http4s"            %% "http4s-testing"               % Http4sVersion % "test",
+    "org.http4s"            %% "http4s-testing"              % Http4sVersion % "test",
     "org.http4s"            %% "http4s-dsl"                  % Http4sVersion,
     "org.specs2"            %% "specs2-core"                 % Specs2Version % "test",
+    "org.specs2"            %% "specs2-matcher-extra"        % Specs2Version % "test",
+    "org.specs2"            %% "specs2-scalacheck"           % Specs2Version % "test",
     "ch.qos.logback"        % "logback-classic"              % LogbackVersion,
     "io.netty"              % "netty-handler"                % nettyVersion,
     "io.netty"              % "netty-codec-http"             % nettyVersion,
@@ -45,7 +46,7 @@ lazy val miku = (project in file("miku"))
   .settings(commonSettings)
   .settings(
     name := "miku",
-    version := "0.0.1-SNAPSHOT",
+    version := "0.0.1-SNAPSHOT"
   )
 
 lazy val examples = (project in file("examples"))

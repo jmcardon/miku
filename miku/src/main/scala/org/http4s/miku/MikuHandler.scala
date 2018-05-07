@@ -31,9 +31,8 @@ import scala.util.{Failure, Success}
   * @param ec
   * @tparam F
   */
-sealed abstract class MikuHandler[F[_]](service: HttpService[F], serviceErrorHandler: ServiceErrorHandler[F])(
-    implicit F: Effect[F],
-    ec: ExecutionContext
+sealed abstract class MikuHandler[F[_]](service: HttpService[F])(
+    implicit F: Effect[F]
 ) extends ChannelInboundHandlerAdapter {
   val unwrapped: Request[F] => F[Response[F]] =
     service.mapF(_.getOrElse(Response.notFound[F])).run
@@ -167,7 +166,7 @@ object MikuHandler {
   private class DefaultHandler[F[_]](service: HttpService[F], serviceErrorHandler: ServiceErrorHandler[F])(
       implicit F: Effect[F],
       ec: ExecutionContext
-  ) extends MikuHandler[F](service, serviceErrorHandler) {
+  ) extends MikuHandler[F](service) {
     override def handle(channel: Channel, request: HttpRequest): F[DefaultHttpResponse] = {
       logger.trace("Http request received by netty: " + request)
       NettyModelConversion
@@ -184,7 +183,7 @@ object MikuHandler {
   private class WebsocketHandler[F[_]](service: HttpService[F], serviceErrorHandler: ServiceErrorHandler[F])(
       implicit F: Effect[F],
       ec: ExecutionContext
-  ) extends MikuHandler[F](service, serviceErrorHandler) {
+  ) extends MikuHandler[F](service) {
     override def handle(channel: Channel, request: HttpRequest): F[DefaultHttpResponse] = {
       logger.trace("Http request received by netty: " + request)
       NettyModelConversion

@@ -1,5 +1,8 @@
 package org.http4s.miku
 
-class MikuServerSpec {
+import cats.effect.IO
+import org.http4s.server.{ServerBuilder, ServerSpec}
 
+class MikuServerSpec extends ServerSpec{
+  def builder: ServerBuilder[IO] = MikuBuilder[IO]
 }
