@@ -69,17 +69,22 @@ class MikuBuilder[F[_]](
     serviceErrorHandler: ServiceErrorHandler[F],
     transport: NettyTransport,
     ec: ExecutionContext,
+    enableWebsockets: Boolean,
     banner: immutable.Seq[String]
 )(implicit F: Effect[F])
     extends ServerBuilder[F]
     with IdleTimeoutSupport[F]
     with SSLKeyStoreSupport[F]
-    with SSLContextSupport[F] {
+    with SSLContextSupport[F]
+    with WebSocketSupport[F] {
   implicit val e     = ec
   private val logger = getLogger
 
   protected[this] def newRequestHandler(): ChannelInboundHandler =
-    new Http4sNettyHandler[F](httpService, serviceErrorHandler) {}
+    if (enableWebsockets)
+      MikuHandler.websocket[F](httpService, serviceErrorHandler)
+    else
+      MikuHandler.default[F](httpService, serviceErrorHandler)
 
   type Self = MikuBuilder[F]
 
@@ -93,6 +98,7 @@ class MikuBuilder[F[_]](
       sslBits: Option[MikuSSLConfig] = sslBits,
       serviceErrorHandler: ServiceErrorHandler[F] = serviceErrorHandler,
       ec: ExecutionContext = ec,
+      enableWebsockets: Boolean = enableWebsockets,
       banner: immutable.Seq[String] = banner,
       transport: NettyTransport = transport
   ): MikuBuilder[F] =
@@ -107,6 +113,7 @@ class MikuBuilder[F[_]](
       serviceErrorHandler,
       transport,
       ec,
+      enableWebsockets,
       banner
     )
 
@@ -178,6 +185,9 @@ class MikuBuilder[F[_]](
     val auth = if (clientAuth) ClientAuthRequired else NoClientAuth
     copy(sslBits = Some(MikuSSLContextBits(sslContext, auth)))
   }
+
+  def withWebSockets(enableWebsockets: Boolean): MikuBuilder[F] =
+    copy(enableWebsockets = enableWebsockets)
 
   private def getContext(): Option[(SSLContext, ClientAuth)] = sslBits.map {
     case MikuKeyStoreBits(keyStore, keyManagerPassword, protocol, trustStore, clientAuth) =>
@@ -310,7 +320,7 @@ class MikuBuilder[F[_]](
     }
 
     //Resolve address
-    val resolvedAddress = new InetSocketAddress(socketAddress.getHostName, socketAddress.getPort)
+    val resolvedAddress                = new InetSocketAddress(socketAddress.getHostName, socketAddress.getPort)
     val (serverChannel, channelSource) = bind(resolvedAddress)
     F.runAsync(
         channelSource
@@ -343,6 +353,7 @@ object MikuBuilder {
       serviceErrorHandler = DefaultServiceErrorHandler[F],
       transport = Native,
       ec = ExecutionContext.global,
+      enableWebsockets = false,
       banner = MikuBanner
     )
   ServerBuilder.DefaultSocketAddress.isUnresolved

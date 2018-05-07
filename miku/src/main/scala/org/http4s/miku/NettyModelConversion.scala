@@ -2,20 +2,24 @@ package org.http4s.miku
 
 import java.net.InetSocketAddress
 
-import cats.effect.Effect
+import cats.effect.{Async, Effect, IO}
 import cats.syntax.all._
-import com.typesafe.netty.http.{DefaultStreamedHttpResponse, StreamedHttpRequest}
-import io.netty.buffer.Unpooled
+import com.typesafe.netty.http.{DefaultStreamedHttpResponse, DefaultWebSocketHttpResponse, StreamedHttpRequest}
+import io.netty.buffer.{ByteBuf, Unpooled}
 import io.netty.channel.Channel
 import io.netty.handler.codec.http._
+import io.netty.handler.codec.http.websocketx.{WebSocketFrame => WSFrame, _}
 import io.netty.handler.ssl.SslHandler
-import fs2._
+import fs2.{Chunk, Pull, Stream}
 import fs2.interop.reactivestreams._
 import org.http4s.Request.Connection
-import org.http4s.headers.{Date, `Content-Length`, Connection => HConnection}
-import org.http4s.util.execution.trampoline
+import org.http4s.headers.`Content-Length`
 import org.http4s.{HttpVersion => HV, _}
-import org.log4s.getLogger
+import org.http4s.server.websocket.websocketKey
+import org.http4s.websocket.WebSocketContext
+import org.http4s.websocket.WebsocketBits._
+import org.http4s.util.execution.trampoline
+import org.reactivestreams.{Processor, Subscriber, Subscription}
 
 import scala.collection.mutable.ListBuffer
 import scala.concurrent.ExecutionContext
@@ -99,18 +103,13 @@ object NettyModelConversion {
           val content = full.content()
           val arr     = new Array[Byte](content.readableBytes())
           content.readBytes(arr)
+          content.release()
           Stream
             .chunk(Chunk.bytes(arr))
             .covary[F]
-            .onFinalize(F.delay(full.release()))
         }
       case streamed: StreamedHttpRequest =>
-        Stream.suspend(streamed.toStream[F]()(F, trampoline).flatMap { h =>
-          val bytes = new Array[Byte](h.content().readableBytes())
-          h.content().readBytes(bytes)
-          h.release()
-          Stream.chunk(Chunk.bytes(bytes)).covary[F]
-        })
+        new NettySafePublisher(streamed).toStream[F]()(F, trampoline).flatMap(Stream.chunk(_))
     }
 
   /** Create a Netty streamed response. */
@@ -138,34 +137,123 @@ object NettyModelConversion {
   /** Create a Netty response from the result */
   def toNettyResponse[F[_]](
       http4sResponse: Response[F]
-  )(implicit F: Effect[F], ec: ExecutionContext): HttpResponse = {
+  )(implicit F: Effect[F], ec: ExecutionContext): DefaultHttpResponse = {
     val httpVersion: HttpVersion =
       if (http4sResponse.httpVersion == HV.`HTTP/1.1`)
         HttpVersion.HTTP_1_1
       else
         HttpVersion.HTTP_1_0
 
-    if (http4sResponse.status.isEntityAllowed) {
-      val publisher = responseToPublisher[F](http4sResponse)
+    toNonWSResponse[F](http4sResponse, httpVersion)
+  }
+
+  /** Create a Netty response from the result */
+  def toNettyResponseWithWebsocket[F[_]](
+      httpRequest: Request[F],
+      httpResponse: Response[F]
+  )(implicit F: Effect[F], ec: ExecutionContext): F[DefaultHttpResponse] = {
+    val httpVersion: HttpVersion =
+      if (httpResponse.httpVersion == HV.`HTTP/1.1`)
+        HttpVersion.HTTP_1_1
+      else
+        HttpVersion.HTTP_1_0
+
+    httpResponse.attributes.get(websocketKey[F]) match {
+      case None            => F.pure(toNonWSResponse[F](httpResponse, httpVersion))
+      case Some(wsContext) => toWSResponse[F](httpRequest, httpResponse, httpVersion, wsContext)
+    }
+  }
+
+  private def toNonWSResponse[F[_]](httpResponse: Response[F], httpVersion: HttpVersion)(
+      implicit F: Effect[F],
+      ec: ExecutionContext
+  ): DefaultHttpResponse =
+    if (httpResponse.status.isEntityAllowed) {
+      val publisher = responseToPublisher[F](httpResponse)
       val response =
         new DefaultStreamedHttpResponse(
           httpVersion,
-          HttpResponseStatus.valueOf(http4sResponse.status.code),
+          HttpResponseStatus.valueOf(httpResponse.status.code),
           publisher
         )
-      http4sResponse.headers.foreach(h => response.headers().add(h.name.value, h.value))
+      httpResponse.headers.foreach(h => response.headers().add(h.name.value, h.value))
       response
     } else {
       val response = new DefaultFullHttpResponse(
         httpVersion,
-        HttpResponseStatus.valueOf(http4sResponse.status.code)
+        HttpResponseStatus.valueOf(httpResponse.status.code)
       )
-      http4sResponse.headers.foreach(h => response.headers().add(h.name.value, h.value))
+      httpResponse.headers.foreach(h => response.headers().add(h.name.value, h.value))
       if (HttpUtil.isContentLengthSet(response))
         response.headers().remove(`Content-Length`.name.toString())
       response
     }
-  }
+
+  private def toWSResponse[F[_]](
+      httpRequest: Request[F],
+      httpResponse: Response[F],
+      httpVersion: HttpVersion,
+      wsContext: WebSocketContext[F]
+  )(
+      implicit F: Effect[F],
+      ec: ExecutionContext
+  ): F[DefaultHttpResponse] =
+    if (httpRequest.headers.exists(
+          h => h.name.toString.equalsIgnoreCase("Upgrade") && h.value.equalsIgnoreCase("websocket")
+        )) {
+      val wsProtocol  = if (httpRequest.isSecure.exists(identity)) "wss" else "ws"
+      val wsUrl       = s"$wsProtocol://${httpRequest.serverAddr}${httpRequest.pathInfo}"
+      val bufferLimit = 65535 //Todo: Configurable. Probably param
+      val factory     = new WebSocketServerHandshakerFactory(wsUrl, "*", true, bufferLimit)
+      StreamSubscriber[F, WebSocketFrame].flatMap { subscriber =>
+        F.delay {
+          val processor = new Processor[WSFrame, WSFrame] {
+            def onError(t: Throwable): Unit = subscriber.onError(t)
+
+            def onComplete(): Unit = subscriber.onComplete()
+
+            def onNext(t: WSFrame): Unit = subscriber.onNext(nettyWsToHttp4s(t))
+
+            def onSubscribe(s: Subscription): Unit = subscriber.onSubscribe(s)
+
+            def subscribe(s: Subscriber[_ >: WSFrame]): Unit =
+              wsContext.webSocket.send.map(wsbitsToNetty).toUnicastPublisher().subscribe(s)
+          }
+
+          F.runAsync(Async.shift[F](ec) >> subscriber.stream.through(wsContext.webSocket.receive).compile.drain)(
+              _ => IO.unit
+            )
+            .unsafeRunSync()
+          val resp =
+            new DefaultWebSocketHttpResponse(httpVersion, HttpResponseStatus.OK, processor, factory)
+          wsContext.headers.foreach(h => resp.headers().add(h.name.toString(), h.value))
+          resp
+        }
+      }
+    } else {
+      wsContext.failureResponse.map(toNonWSResponse[F](_, httpVersion))
+    }
+
+  private def wsbitsToNetty(w: WebSocketFrame): WSFrame =
+    w match {
+      case Text(str, last)    => new TextWebSocketFrame(last, 0, str)
+      case Binary(data, last) => new BinaryWebSocketFrame(last, 0, Unpooled.wrappedBuffer(data))
+      case Ping(data)         => new PingWebSocketFrame(Unpooled.wrappedBuffer(data))
+      case Pong(data)         => new PongWebSocketFrame(Unpooled.wrappedBuffer(data))
+      case Continuation(data, last) =>
+        new ContinuationWebSocketFrame(last, 0, Unpooled.wrappedBuffer(data))
+      case Close(data) => new CloseWebSocketFrame(true, 0, Unpooled.wrappedBuffer(data))
+    }
+
+  private def nettyWsToHttp4s(w: WSFrame): WebSocketFrame =
+    w match {
+      case c: TextWebSocketFrame         => Text(bytebufToArray(c.content()), c.isFinalFragment)
+      case c: BinaryWebSocketFrame       => Binary(bytebufToArray(c.content()), c.isFinalFragment)
+      case c: PingWebSocketFrame         => Ping(bytebufToArray(c.content()))
+      case c: PongWebSocketFrame         => Pong(bytebufToArray(c.content()))
+      case c: ContinuationWebSocketFrame => Continuation(bytebufToArray(c.content()), c.isFinalFragment)
+      case c: CloseWebSocketFrame        => Close(bytebufToArray(c.content()))
+    }
 
   /** Convert a Chunk to a Netty ByteBuf. */
   private def chunkToNetty(bytes: Chunk[Byte]): HttpContent =
@@ -180,6 +268,13 @@ object NettyModelConversion {
         case _ =>
           new DefaultHttpContent(Unpooled.wrappedBuffer(bytes.toArray))
       }
+
+  private def bytebufToArray(buf: ByteBuf): Array[Byte] = {
+    val array = new Array[Byte](buf.readableBytes())
+    buf.readBytes(array)
+    buf.release()
+    array
+  }
 
   private val CachedEmpty: DefaultHttpContent =
     new DefaultHttpContent(Unpooled.EMPTY_BUFFER)
