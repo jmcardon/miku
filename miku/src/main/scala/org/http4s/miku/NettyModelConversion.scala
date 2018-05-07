@@ -220,14 +220,12 @@ object NettyModelConversion {
                 wsContext.webSocket.send.map(wsbitsToNetty).toUnicastPublisher().subscribe(s)
             }
 
-            F.runAsync(
+            F.runAsync {
                 Async.shift[F](ec) >> subscriber.stream
                   .through(wsContext.webSocket.receive)
                   .compile
                   .drain
-              )(
-                _ => IO.unit
-              )
+              }(_ => IO.unit)
               .unsafeRunSync()
             val resp: DefaultHttpResponse =
               new DefaultWebSocketHttpResponse(httpVersion, HttpResponseStatus.OK, processor, factory)
