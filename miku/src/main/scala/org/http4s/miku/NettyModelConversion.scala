@@ -10,16 +10,15 @@ import io.netty.channel.Channel
 import io.netty.handler.codec.http._
 import io.netty.handler.codec.http.websocketx.{WebSocketFrame => WSFrame, _}
 import io.netty.handler.ssl.SslHandler
-import fs2.{async, Chunk, Pipe, Pull, Sink, Stream}
+import fs2.{Chunk, Pull, Stream}
 import fs2.interop.reactivestreams._
 import org.http4s.Request.Connection
-import org.http4s.headers.{Date, `Content-Length`, Connection => HConnection}
+import org.http4s.headers.`Content-Length`
 import org.http4s.{HttpVersion => HV, _}
 import org.http4s.server.websocket.websocketKey
-import org.http4s.websocket.WebsocketBits.WebSocketFrame
-import org.http4s.websocket.{WebSocketContext, WebsocketBits, WebsocketHandshake}
+import org.http4s.websocket.WebSocketContext
+import org.http4s.websocket.WebsocketBits._
 import org.http4s.util.execution.trampoline
-import org.log4s.getLogger
 import org.reactivestreams.{Processor, Subscriber, Subscription}
 
 import scala.collection.mutable.ListBuffer
@@ -237,23 +236,23 @@ object NettyModelConversion {
 
   private def wsbitsToNetty(w: WebSocketFrame): WSFrame =
     w match {
-      case WebsocketBits.Text(str, last)    => new TextWebSocketFrame(last, 0, str)
-      case WebsocketBits.Binary(data, last) => new BinaryWebSocketFrame(last, 0, Unpooled.wrappedBuffer(data))
-      case WebsocketBits.Ping(data)         => new PingWebSocketFrame(Unpooled.wrappedBuffer(data))
-      case WebsocketBits.Pong(data)         => new PongWebSocketFrame(Unpooled.wrappedBuffer(data))
-      case WebsocketBits.Continuation(data, last) =>
+      case Text(str, last)    => new TextWebSocketFrame(last, 0, str)
+      case Binary(data, last) => new BinaryWebSocketFrame(last, 0, Unpooled.wrappedBuffer(data))
+      case Ping(data)         => new PingWebSocketFrame(Unpooled.wrappedBuffer(data))
+      case Pong(data)         => new PongWebSocketFrame(Unpooled.wrappedBuffer(data))
+      case Continuation(data, last) =>
         new ContinuationWebSocketFrame(last, 0, Unpooled.wrappedBuffer(data))
-      case WebsocketBits.Close(data) => new CloseWebSocketFrame(true, 0, Unpooled.wrappedBuffer(data))
+      case Close(data) => new CloseWebSocketFrame(true, 0, Unpooled.wrappedBuffer(data))
     }
 
   private def nettyWsToHttp4s(w: WSFrame): WebSocketFrame =
     w match {
-      case c: TextWebSocketFrame         => WebsocketBits.Text(bytebufToArray(c.content()), c.isFinalFragment)
-      case c: BinaryWebSocketFrame       => WebsocketBits.Binary(bytebufToArray(c.content()), c.isFinalFragment)
-      case c: PingWebSocketFrame         => WebsocketBits.Ping(bytebufToArray(c.content()))
-      case c: PongWebSocketFrame         => WebsocketBits.Pong(bytebufToArray(c.content()))
-      case c: ContinuationWebSocketFrame => WebsocketBits.Continuation(bytebufToArray(c.content()), c.isFinalFragment)
-      case c: CloseWebSocketFrame        => WebsocketBits.Close(bytebufToArray(c.content()))
+      case c: TextWebSocketFrame         => Text(bytebufToArray(c.content()), c.isFinalFragment)
+      case c: BinaryWebSocketFrame       => Binary(bytebufToArray(c.content()), c.isFinalFragment)
+      case c: PingWebSocketFrame         => Ping(bytebufToArray(c.content()))
+      case c: PongWebSocketFrame         => Pong(bytebufToArray(c.content()))
+      case c: ContinuationWebSocketFrame => Continuation(bytebufToArray(c.content()), c.isFinalFragment)
+      case c: CloseWebSocketFrame        => Close(bytebufToArray(c.content()))
     }
 
   /** Convert a Chunk to a Netty ByteBuf. */
