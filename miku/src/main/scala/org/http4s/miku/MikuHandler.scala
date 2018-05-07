@@ -47,7 +47,7 @@ sealed abstract class MikuHandler[F[_]](service: HttpService[F], serviceErrorHan
   // in.
   private var lastResponseSent: Future[Unit] = Future.successful(())
 
-  private val logger = getLogger
+  protected val logger = getLogger
 
   /**
     * Handle the given request.
