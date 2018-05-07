@@ -207,31 +207,35 @@ object NettyModelConversion {
       val factory     = new WebSocketServerHandshakerFactory(wsUrl, "*", true, bufferLimit)
       StreamSubscriber[F, WebSocketFrame].flatMap { subscriber =>
         F.delay {
-          val processor = new Processor[WSFrame, WSFrame] {
-            def onError(t: Throwable): Unit = subscriber.onError(t)
+            val processor = new Processor[WSFrame, WSFrame] {
+              def onError(t: Throwable): Unit = subscriber.onError(t)
 
-            def onComplete(): Unit = subscriber.onComplete()
+              def onComplete(): Unit = subscriber.onComplete()
 
-            def onNext(t: WSFrame): Unit = subscriber.onNext(nettyWsToHttp4s(t))
+              def onNext(t: WSFrame): Unit = subscriber.onNext(nettyWsToHttp4s(t))
 
-            def onSubscribe(s: Subscription): Unit = subscriber.onSubscribe(s)
+              def onSubscribe(s: Subscription): Unit = subscriber.onSubscribe(s)
 
-            def subscribe(s: Subscriber[_ >: WSFrame]): Unit =
-              wsContext.webSocket.send.map(wsbitsToNetty).toUnicastPublisher().subscribe(s)
+              def subscribe(s: Subscriber[_ >: WSFrame]): Unit =
+                wsContext.webSocket.send.map(wsbitsToNetty).toUnicastPublisher().subscribe(s)
+            }
+
+            F.runAsync {
+                Async.shift[F](ec) >> subscriber.stream
+                  .through(wsContext.webSocket.receive)
+                  .compile
+                  .drain
+              }(_ => IO.unit)
+              .unsafeRunSync()
+            val resp: DefaultHttpResponse =
+              new DefaultWebSocketHttpResponse(httpVersion, HttpResponseStatus.OK, processor, factory)
+            wsContext.headers.foreach(h => resp.headers().add(h.name.toString(), h.value))
+            resp
           }
-
-          F.runAsync(Async.shift[F](ec) >> subscriber.stream.through(wsContext.webSocket.receive).compile.drain)(
-              _ => IO.unit
-            )
-            .unsafeRunSync()
-          val resp =
-            new DefaultWebSocketHttpResponse(httpVersion, HttpResponseStatus.OK, processor, factory)
-          wsContext.headers.foreach(h => resp.headers().add(h.name.toString(), h.value))
-          resp
-        }
+          .handleErrorWith(_ => wsContext.failureResponse.map(toNonWSResponse[F](_, httpVersion)))
       }
     } else {
-      wsContext.failureResponse.map(toNonWSResponse[F](_, httpVersion))
+      F.pure(toNonWSResponse[F](httpResponse, httpVersion))
     }
 
   private def wsbitsToNetty(w: WebSocketFrame): WSFrame =

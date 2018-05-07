@@ -287,6 +287,9 @@ class MikuBuilder[F[_]](
       }
     }
 
+    /** Bind our server to our address and create the channel handler stream, which we must
+      * bind the handlers to.
+      */
     def bind(
         address: InetSocketAddress
     ): (Channel, fs2.Stream[F, Channel]) = {
@@ -341,9 +344,9 @@ class MikuBuilder[F[_]](
 }
 
 object MikuBuilder {
-  def apply[F[_]: Effect](httpService: HttpService[F]) =
+  def apply[F[_]: Effect] =
     new MikuBuilder[F](
-      httpService,
+      httpService = HttpService.empty[F],
       socketAddress = ServerBuilder.DefaultSocketAddress,
       idleTimeout = IdleTimeoutSupport.DefaultIdleTimeout,
       maxInitialLineLength = 4096,
@@ -359,23 +362,23 @@ object MikuBuilder {
   ServerBuilder.DefaultSocketAddress.isUnresolved
 
   val MikuBanner =
-    """　　　　　　　 ┌--,--‐'￣￣￣ー―-､／＼
-      |　　　　　　,イ |／: : : : : : :〈〈二ゝ＼
+    """　　　　　　　 ┌--,-'￣￣￣ー―-､／＼
+      |　　　　　　,イ |／: : : : :〈〈二ゝ＼
       |　　　　　/: /: : : : : : : : : ＼|::＼
-      |　　　　/: :イ: : ∧: : :∧: : : : :|: :ﾍ
-      |　　　 /: : |: :/_ \::/-＼: : : :|: : :ﾍ
-      |　　　/: : :|: /　　 \/　　＼: :__|: : : :ﾍ
-      |　　 .ｌ: : |:/ o　　　　o　　|::/:::|: : :ﾍ
-      |　　 |: : : \/\  |￣￣￣| 　.|:/ー|: : : : |
-      |　　 |: : : |ヽ＼|＿＿＿|＿/|/__| .|: : : |
-      |　　|: : : :|　＾_/|_/\_/\　　　　|: : : : |
-      |　　|: : : :|　　( | TT ￣|ヽ　　 .|: : : :|
-      |　　|: : : :|　　ﾄ-| ||　 | ﾍ　　 |: : : : |
-      |　　.|: : : | 　 L/  ||   |  ﾍ　 .|: : : : |
-      |　　.ﾍ: : : |　　 |＿＿,､__ﾍ--´　.|: : : : |
-      |　　　ﾍ: : :|　  く////\\\\>ヽJ　 |.: : ::/
-      |　　　　ﾍ: :|　　　.ﾄ-| .ﾄ-|　　　　|／￣＼:／
-      |　　　　　＼／　　　 |_|　|_|　　　　　　　|／
+      |　　　　/: :イ: :∧: : ∧: : : : : :|:  :ﾍ
+      |　　　 /: : |: :/_\::/_＼: : : : :|: : :ﾍ
+      |　　　/: : :|: /　 \/　　＼: : ___|: : : ﾍ
+      |　　 |:: : |::/ o 　  　o |:::/:::|: : : :ﾍ
+      |　　 |: : : \/\  |￣￣￣| ||:/ーー|: : : :|
+      |　　 |: : : |ヽ＼|＿＿＿|_/|/_|   |: : : :|
+      |　　 |: : : |　＾_/|_/\_/\　　　  |: : : :|
+      |　　 |: : : |　　( | TT ￣|ヽ　　 |: : : :|
+      |　　 |: : : |　　ﾄ-| ||　 | ﾍ　　 |: : : :|
+      |　　 |: : : | 　 L/| ||   |  ﾍ　  |: : : :|
+      |　　  ﾍ : : |　　  |__,､__ﾍ--´　  |: : : :|
+      |　　　 ﾍ : :|　  く////\\\\>ヽJ　 |: : : :/
+      |　　　　ﾍ: /　　 　ﾄ-| .ﾄ-|　　   |／￣＼/
+      |　　　　 \/　　 　 |_|　|_|　　　
       |  _   _   _        _ _
       | | |_| |_| |_ _ __| | | ___
       | | ' \  _|  _| '_ \_  _(_-<

@@ -11,8 +11,8 @@ object Natto extends StreamApp[IO] {
 
   def stream(args: List[String], requestShutdown: IO[Unit]): fs2.Stream[IO, StreamApp.ExitCode] =
     for {
-      sc <- Scheduler[IO](1)
-      serve <- MikuBuilder[IO](new HelloWorldService[IO](sc).appRoutes).withWebSockets(true).serve
+      sc    <- Scheduler[IO](1)
+      serve <- MikuBuilder[IO].mountService(new HelloWorldService[IO](sc).appRoutes).withWebSockets(true).serve
     } yield serve
 
 }
