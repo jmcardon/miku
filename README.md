@@ -14,12 +14,15 @@ Credits to them for a lot of the gluework for netty.
 - [x] SSL
 - [ ] MountService (I don't want it)
 - [ ] (Maybe) Server header
-- [ ] Tests
+- [X] Tests
 - [ ] More tests
 - [ ] Profilin'
-- [ ] Websocket support
+- [X] Websocket support
 
 ## Try it!
 
 Fork the repo, move to the examples project and play with the `ServerBuilder` there.
 
+## Status
+
+Moved to http4s proper. Track progress here: https://github.com/http4s/http4s/pull/1831
